@@ -40,21 +40,38 @@ export default function MobileAgroApp() {
   const [showReportModal, setShowReportModal] = useState(false);
   const [isLocating, setIsLocating] = useState(false);
   const [isFieldLocked, setIsFieldLocked] = useState(false);
-  const [selectedTaskId, setSelectedTaskId] = useState(null); // Фақат IDни сақлаш учун
+  const [selectedTaskId, setSelectedTaskId] = useState(null);
   const [reportData, setReportData] = useState({ 
     field_id: '', type: 'inspection', note: '', image: null, lat: null, lon: null 
   });
 
-  const notifyMe = (title) => {
+  // Янгиланган тизимли билдиришнома функцияси
+  const notifyMe = async (title) => {
+    if (!("Notification" in window)) return;
+
     if (Notification.permission === "granted") {
-      new Notification("AGROPRO: Янги вазифа", {
-        body: title,
-        icon: "/logo192.png"
-      });
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (reg) {
+        reg.showNotification("AGROPRO: Янги вазифа", {
+          body: title,
+          icon: "/logo192.png",
+          tag: 'new-task',
+          renotify: true
+        });
+      } else {
+        new Notification("AGROPRO: Янги вазифа", { body: title });
+      }
     }
   };
 
   useEffect(() => {
+    // Service Worker рўйхатдан ўтказиш
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js')
+        .then(reg => console.log('SW рўйхатдан ўтди!', reg))
+        .catch(err => console.error('SW хатоси:', err));
+    }
+
     if ("Notification" in window) {
       Notification.requestPermission();
     }
@@ -131,8 +148,6 @@ export default function MobileAgroApp() {
 
   async function fetchAppData(agroId) {
     const { data: allTasks } = await supabase.from('tasks').select('*, fields(name)').eq('agronomist_id', agroId);
-    
-    // Энди вазифаларни филтрламаймиз, ҳаммаси рўйхатда қолади
     setMyTasks(allTasks || []);
     
     const doneTasks = allTasks?.filter(t => t.status === 'completed') || [];
@@ -157,35 +172,10 @@ export default function MobileAgroApp() {
     setAuthLoading(false);
   };
 
-  const getGeoLocation = () => {
-    setIsLocating(true);
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setReportData(prev => ({ ...prev, lat: pos.coords.latitude, lon: pos.coords.longitude }));
-        setIsLocating(false);
-        alert("📍 GPS аниқланди");
-      },
-      (err) => { setIsLocating(false); alert("GPS хатоси: " + err.message); },
-      { enableHighAccuracy: true }
-    );
-  };
-
   const handleFieldSelect = (fieldId) => {
     const field = myFields.find(f => f.id === parseInt(fieldId));
     setReportData({ ...reportData, field_id: fieldId });
     setIsFieldLocked(field && !field.location_center);
-  };
-
-  const saveFieldLocation = async () => {
-    if (!reportData.lat) return alert("Аввал GPS тугмасини босинг!");
-    const { error } = await supabase.from('fields').update({ 
-      location_center: { lat: reportData.lat, lon: reportData.lon } 
-    }).eq('id', reportData.field_id);
-    if (!error) { 
-      alert("✅ Дала боғланди!"); 
-      setIsFieldLocked(false); 
-      fetchAppData(agroProfile.id); 
-    }
   };
 
   const submitReport = async () => {
@@ -198,7 +188,6 @@ export default function MobileAgroApp() {
       operation_date: new Date().toISOString()
     }]);
     if (!error) {
-      // Статусни янгилаш
       if (selectedTaskId) {
         await supabase.from('tasks').update({ status: 'completed' }).eq('id', selectedTaskId);
       }
@@ -350,7 +339,7 @@ export default function MobileAgroApp() {
   );
 }
 
-// СТИЛЛАР ВА КОМПОНЕНТЛАР ОЛДИНГИДЕК ҚОЛДИ
+// Кичик компонентлар ва стиллар (ўзгаришсиз)
 const NavBtn = ({ active, icon, onClick }) => (
   <button onClick={onClick} style={{ background:'none', border:'none', padding:'12px', color: active ? THEME.accent : 'rgba(255,255,255,0.4)', transition: 'all 0.3s ease', transform: active ? 'scale(1.2)' : 'scale(1)', cursor:'pointer' }}>{icon}</button>
 );
