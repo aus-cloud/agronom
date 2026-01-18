@@ -1,0 +1,341 @@
+import React, { useEffect, useState } from 'react';
+import { supabase } from './supabaseClient';
+import { 
+  CheckSquare, Map, Package, Camera, MapPin, 
+  Send, ChevronRight, Droplets, Bug, Loader2, LogOut, User, Target, Thermometer, Lock, Mail, X 
+} from 'lucide-react';
+
+const THEME = {
+  accent: '#10b981',
+  accentGradient: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+  text: '#ffffff',
+  textSecondary: 'rgba(255, 255, 255, 0.6)',
+  danger: '#ef4444',
+  glass: {
+    background: 'rgba(20, 20, 20, 0.75)',
+    backdropFilter: 'blur(20px)',
+    WebkitBackdropFilter: 'blur(20px)',
+    border: '1px solid rgba(255, 255, 255, 0.1)',
+    borderRadius: '24px',
+  }
+};
+
+export default function MobileAgroApp() {
+  const [session, setSession] = useState(null);
+  const [agroProfile, setAgroProfile] = useState(null);
+  const [activeTab, setActiveTab] = useState('tasks');
+  const [loading, setLoading] = useState(true);
+  
+  // Auth states
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
+
+  // App data
+  const [myFields, setMyFields] = useState([]);
+  const [myTasks, setMyTasks] = useState([]);
+  const [inventory, setInventory] = useState([]);
+  
+  // Report states (Сиз ёқтирган коддаги логика)
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [isLocating, setIsLocating] = useState(false);
+  const [isFieldLocked, setIsFieldLocked] = useState(false);
+  const [reportData, setReportData] = useState({ 
+    field_id: '', type: 'inspection', note: '', image: null, lat: null, lon: null 
+  });
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      if (session) fetchAgroProfile(session.user.id);
+      setLoading(false);
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+      if (session) fetchAgroProfile(session.user.id);
+      else setAgroProfile(null);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  async function handleLogin(e) {
+    e.preventDefault();
+    setAuthLoading(true);
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) alert("Хато: " + error.message);
+    setAuthLoading(false);
+  }
+
+  async function fetchAgroProfile(authId) {
+    const { data } = await supabase.from('agronomists').select('*').eq('auth_id', authId).single();
+    if (data) {
+      setAgroProfile(data);
+      fetchAppData(data.id);
+    }
+  }
+
+  async function fetchAppData(agroId) {
+    const { data: tData } = await supabase.from('tasks').select('*, fields(name)').eq('status', 'pending');
+    setMyTasks(tData || []);
+    const { data: fData } = await supabase.from('fields').select('*').eq('agronomist_id', agroId);
+    setMyFields(fData || []);
+    const { data: iData } = await supabase.from('inventory').select('*');
+    setInventory(iData || []);
+  }
+
+  // --- GPS LOGIC (FROM YOUR CODE) ---
+  const getGeoLocation = () => {
+    setIsLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setReportData(prev => ({ ...prev, lat: pos.coords.latitude, lon: pos.coords.longitude }));
+        setIsLocating(false);
+        alert("📍 GPS аниқланди");
+      },
+      (err) => { setIsLocating(false); alert("GPS хатоси: " + err.message); },
+      { enableHighAccuracy: true }
+    );
+  };
+
+  const handleFieldSelect = (fieldId) => {
+    const field = myFields.find(f => f.id === parseInt(fieldId));
+    setReportData({ ...reportData, field_id: fieldId });
+    setIsFieldLocked(field && !field.location_center);
+  };
+
+  const saveFieldLocation = async () => {
+    if (!reportData.lat) return alert("Аввал GPS тугмасини босинг!");
+    const { error } = await supabase.from('fields').update({ 
+      location_center: { lat: reportData.lat, lon: reportData.lon } 
+    }).eq('id', reportData.field_id);
+    if (!error) { 
+      alert("✅ Дала боғланди!"); 
+      setIsFieldLocked(false); 
+      fetchAppData(agroProfile.id); 
+    }
+  };
+
+  const submitReport = async () => {
+    if (!reportData.field_id || !reportData.note) return alert("Маълумотни тўлдиринг!");
+    setAuthLoading(true);
+    const { error } = await supabase.from('field_operations').insert([{
+      field_id: reportData.field_id,
+      operation_type: reportData.type,
+      description: reportData.note,
+      operation_date: new Date().toISOString()
+    }]);
+
+    if (!error) {
+      alert("🚀 Ҳисобот юборилди!");
+      setShowReportModal(false);
+      setReportData({ field_id: '', type: 'inspection', note: '', image: null, lat: null, lon: null });
+    } else {
+      alert("Хато: " + error.message);
+    }
+    setAuthLoading(false);
+  };
+
+  const handleSignOut = () => supabase.auth.signOut();
+
+  // --- LOGIN UI ---
+  if (!session && !loading) {
+    return (
+      <div style={loginOverlay}>
+        <div style={{...THEME.glass, padding: '40px 30px', width: '90%', maxWidth: '400px', textAlign: 'center'}}>
+          <h1 style={{fontSize: '2rem', fontWeight: '900', marginBottom: '10px'}}>AGRO<span style={{color: THEME.accent}}>PRO</span></h1>
+          <p style={{color: THEME.textSecondary, marginBottom: '30px'}}>Тизимга кириш</p>
+          <form onSubmit={handleLogin}>
+            <div style={inputWrapper}>
+              <Mail size={18} style={inputIcon} /><input type="email" placeholder="Email" style={loginInput} value={email} onChange={e => setEmail(e.target.value)} required />
+            </div>
+            <div style={inputWrapper}>
+              <Lock size={18} style={inputIcon} /><input type="password" placeholder="Пароль" style={loginInput} value={password} onChange={e => setPassword(e.target.value)} required />
+            </div>
+            <button type="submit" disabled={authLoading} style={loginBtn}>{authLoading ? <Loader2 className="animate-spin" /> : "КИРИШ"}</button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  if (loading) return <div style={fullCenter}><Loader2 className="animate-spin" color={THEME.accent} /></div>;
+
+  return (
+    <div style={{
+      minHeight: '100vh',
+      backgroundImage: activeTab === 'tasks' ? "url('/bg.jpg')" : 'radial-gradient(circle at 50% 10%, #0f2e20 0%, #000000 100%)',
+      backgroundSize: 'cover', backgroundPosition: 'center', backgroundAttachment: 'fixed', color: THEME.text
+    }}>
+      <div style={{ background: activeTab === 'tasks' ? 'rgba(0,0,0,0.6)' : 'transparent', minHeight: '100vh', paddingBottom: '100px' }}>
+        
+        <div style={styles.headerGlass}>
+          <h1 style={{ fontSize: '1.4rem', fontWeight: '900', margin: 0 }}>AGRO<span style={{ color: THEME.accent }}>PRO</span></h1>
+          <button onClick={handleSignOut} style={styles.iconBtn}><LogOut size={22} /></button>
+        </div>
+
+        <main style={{ padding: '20px' }}>
+          {activeTab === 'tasks' && (
+            <div>
+               <h2 style={{fontSize:'1.8rem', fontWeight:'800', marginBottom:'5px'}}>Салом, {agroProfile?.full_name?.split(' ')[0]}!</h2>
+               <p style={{color: THEME.accent, fontWeight:'600', marginBottom:'20px'}}>Бугунги вазифалар: {myTasks.length} та</p>
+               {myTasks.map(t => (
+                 <div key={t.id} style={{ ...THEME.glass, marginBottom:'12px', padding:'15px', display:'flex', alignItems:'center' }}>
+                   <div style={styles.taskIcon}><Target size={20} color={THEME.accent}/></div>
+                   <div><div style={{fontWeight:'600'}}>{t.description}</div><div style={{fontSize:'0.8rem', color: THEME.textSecondary}}>📍 {t.fields?.name}</div></div>
+                 </div>
+               ))}
+            </div>
+          )}
+
+          {activeTab === 'fields' && (
+            <div>
+              <h2 style={styles.sectionTitle}>Далалар</h2>
+              {myFields.map(f => (
+                <div key={f.id} onClick={() => { handleFieldSelect(f.id); setShowReportModal(true); }} style={{...THEME.glass, marginBottom:'12px', padding:'20px', display:'flex', justifyContent:'space-between', alignItems:'center'}}>
+                  <div><div style={{fontSize:'1.1rem', fontWeight:'700'}}>{f.name}</div><div style={{fontSize:'0.85rem', color: THEME.textSecondary}}>{f.crop_type} • {f.area_hectares} га {f.location_center ? '📍' : '⚠️'}</div></div>
+                  <ChevronRight size={20}/>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {activeTab === 'inventory' && <InventoryView inventory={inventory} />}
+          {activeTab === 'profile' && <ProfileView profile={agroProfile} onLogout={handleSignOut} />}
+        </main>
+
+        <div style={styles.bottomNavContainer}>
+          <div style={styles.bottomNavGlass}>
+            <NavBtn active={activeTab === 'tasks'} onClick={() => setActiveTab('tasks')} icon={<CheckSquare size={20}/>} label="Вазифалар" />
+            <NavBtn active={activeTab === 'fields'} onClick={() => setActiveTab('fields')} icon={<Map size={20}/>} label="Далалар" />
+            <div style={{ position: 'relative', top: '-25px' }}>
+              <button onClick={() => setShowReportModal(true)} style={styles.fabBtn}><Camera size={26} color="#000" /></button>
+            </div>
+            <NavBtn active={activeTab === 'inventory'} onClick={() => setActiveTab('inventory')} icon={<Package size={20}/>} label="Омбор" />
+            <NavBtn active={activeTab === 'profile'} onClick={() => setActiveTab('profile')} icon={<User size={20}/>} label="Профиль" />
+          </div>
+        </div>
+
+        {/* MODAL (WITH YOUR UPDATED LOGIC) */}
+        {showReportModal && (
+          <div style={styles.modalOverlay}>
+            <div style={styles.modalHeader}>
+              <h2 style={{margin:0, fontSize:'1.5rem'}}>Янги ҳисобот</h2>
+              <button onClick={() => setShowReportModal(false)} style={styles.closeBtn}><X /></button>
+            </div>
+            <div style={{padding:'20px', height:'90%', overflowY:'auto'}}>
+              <label style={styles.label}>🌳 Дала</label>
+              <select style={styles.inputGlass} value={reportData.field_id} onChange={(e) => handleFieldSelect(e.target.value)}>
+                <option value="">Танланг...</option>
+                {myFields.map(f => <option key={f.id} value={f.id} style={{color:'#000'}}>{f.name} {f.location_center ? '📍' : '⚠️'}</option>)}
+              </select>
+
+              {isFieldLocked && (
+                <div style={warningBox}>
+                  <p style={{fontSize:'0.85rem', marginBottom:'10px', color:'#fff'}}>🚨 Далани харитага боғлаш зарур:</p>
+                  <div style={{display:'flex', gap:'10px'}}>
+                    <button onClick={getGeoLocation} style={smallActionBtn}>
+                       {isLocating ? <Loader2 className="animate-spin" size={14}/> : <MapPin size={14}/>} {reportData.lat ? 'GPS OK' : 'GPS'}
+                    </button>
+                    <button onClick={saveFieldLocation} disabled={!reportData.lat} style={{...smallActionBtn, background:THEME.accent, color:'#000', fontWeight:'700'}}>САҚЛАШ</button>
+                  </div>
+                </div>
+              )}
+
+              <div style={{ opacity: isFieldLocked ? 0.3 : 1, pointerEvents: isFieldLocked ? 'none' : 'auto', marginTop:'20px' }}>
+                <label style={styles.label}>🛠️ Иш тури</label>
+                <div style={typeGrid}>
+                  <TypeBtn active={reportData.type==='inspection'} icon={<Map size={18}/>} label="Кўрик" onClick={()=>setReportData({...reportData, type:'inspection'})}/>
+                  <TypeBtn active={reportData.type==='watering'} icon={<Droplets size={18}/>} label="Суғориш" onClick={()=>setReportData({...reportData, type:'watering'})}/>
+                  <TypeBtn active={reportData.type==='pest'} icon={<Bug size={18}/>} label="Зараркунанда" onClick={()=>setReportData({...reportData, type:'pest'})}/>
+                </div>
+
+                <label style={styles.label}>📸 Фото ва Изоҳ</label>
+                <div style={{display:'flex', gap:'10px', marginBottom:'20px'}}>
+                  <label style={photoUploadCard}>
+                    <input type="file" accept="image/*" capture="environment" hidden onChange={(e) => { setReportData({...reportData, image: e.target.files[0]}); alert("Фото олинди"); }} />
+                    <Camera size={24} color={reportData.image ? THEME.accent : THEME.textSecondary}/>
+                    <span style={{fontSize:'0.7rem', marginTop:'5px'}}>{reportData.image ? "Фото OK" : "Расм олиш"}</span>
+                  </label>
+                  <textarea style={{...styles.inputGlass, flex:2, height:'100px', margin:0}} placeholder="Нима гаплар?.." value={reportData.note} onChange={e => setReportData({...reportData, note: e.target.value})} />
+                </div>
+
+                <button onClick={submitReport} style={loginBtn}>
+                  {authLoading ? <Loader2 className="animate-spin" /> : <><Send size={20} style={{marginRight:'10px'}}/> ЮБОРИШ</>}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// --- SUB-COMPONENTS ---
+const NavBtn = ({ active, icon, label, onClick }) => (
+  <div onClick={onClick} style={{ textAlign:'center', color: active ? THEME.accent : 'rgba(255,255,255,0.4)', cursor:'pointer' }}>
+    <div style={{ background: active ? 'rgba(16, 185, 129, 0.15)' : 'transparent', padding:'8px', borderRadius:'12px' }}>{icon}</div>
+    <span style={{ fontSize: '0.6rem' }}>{label}</span>
+  </div>
+);
+
+const TypeBtn = ({ active, icon, label, onClick }) => (
+  <div onClick={onClick} style={{ padding:'12px 5px', borderRadius:'12px', textAlign:'center', flex:1, background: active ? 'rgba(16, 185, 129, 0.15)' : 'rgba(255,255,255,0.05)', border: `1px solid ${active ? THEME.accent : 'rgba(255,255,255,0.1)'}`, color: active ? THEME.accent : THEME.textSecondary, cursor:'pointer' }}>
+    {icon}<div style={{fontSize:'0.65rem', marginTop:'4px'}}>{label}</div>
+  </div>
+);
+
+const ProfileView = ({ profile, onLogout }) => (
+  <div style={{ textAlign:'center', paddingTop:'40px' }}>
+    <div style={styles.avatar}><User size={45} color={THEME.accent}/></div>
+    <h2 style={{margin:0}}>{profile?.full_name}</h2>
+    <p style={{color:THEME.textSecondary, marginBottom:'30px'}}>Агроном</p>
+    <button onClick={onLogout} style={styles.logoutBtn}>ЧИҚИШ</button>
+  </div>
+);
+
+const InventoryView = ({ inventory }) => (
+  <div>
+    <h2 style={styles.sectionTitle}>Омбор захираси</h2>
+    <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:'10px'}}>
+      {inventory.map(i => (
+        <div key={i.id} style={{...THEME.glass, padding:'15px'}}>
+          <div style={{fontSize:'0.9rem', marginBottom:'5px'}}>{i.item_name}</div>
+          <div style={{fontSize:'1.2rem', fontWeight:'700', color:THEME.accent}}>{i.quantity} {i.unit}</div>
+        </div>
+      ))}
+    </div>
+  </div>
+);
+
+// --- STYLES ---
+const styles = {
+  headerGlass: { ...THEME.glass, borderRadius:'0 0 24px 24px', borderTop:'none', padding:'20px', display:'flex', justifyContent:'space-between', alignItems:'center', position:'sticky', top:0, zIndex:50, background:'rgba(20,20,20,0.8)' },
+  bottomNavContainer: { position:'fixed', bottom:'20px', left:'16px', right:'16px', zIndex:100 },
+  bottomNavGlass: { ...THEME.glass, background:'rgba(10,10,10,0.9)', borderRadius:'30px', padding:'12px', display:'flex', justifyContent:'space-between', alignItems:'center', height:'70px' },
+  fabBtn: { width:'60px', height:'60px', borderRadius:'50%', background: THEME.accentGradient, border:'4px solid #000', display:'flex', alignItems:'center', justifyContent:'center' },
+  iconBtn: { background:'rgba(255,255,255,0.05)', border:'none', borderRadius:'12px', padding:'8px', color:'#fff' },
+  taskIcon: { width:'40px', height:'40px', borderRadius:'12px', background:'rgba(16,185,129,0.1)', display:'flex', alignItems:'center', justifyContent:'center', marginRight:'15px' },
+  sectionTitle: { fontSize:'1.5rem', fontWeight:'800', marginBottom:'15px' },
+  avatar: { width:'100px', height:'100px', borderRadius:'50%', border:`2px solid ${THEME.accent}`, margin:'0 auto 20px', display:'flex', alignItems:'center', justifyContent:'center', background:'rgba(255,255,255,0.05)' },
+  logoutBtn: { width:'100%', padding:'15px', borderRadius:'15px', border:`1px solid ${THEME.danger}`, color:THEME.danger, background:'none', fontWeight:'700' },
+  modalOverlay: { position:'fixed', top:0, left:0, width:'100%', height:'100%', background:'#000', zIndex:1000 },
+  modalHeader: { padding:'40px 20px 20px', display:'flex', justifyContent:'space-between', alignItems:'center' },
+  closeBtn: { background:'rgba(255,255,255,0.1)', border:'none', color:'#fff', width:'40px', height:'40px', borderRadius:'50%' },
+  inputGlass: { width:'100%', padding:'16px', borderRadius:'12px', background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.1)', color:'#fff', outline:'none' },
+  label: { display:'block', color: THEME.textSecondary, fontSize:'0.8rem', marginBottom:'8px' }
+};
+
+const warningBox = { background: 'rgba(239, 68, 68, 0.1)', border: `1px solid ${THEME.danger}`, padding: '15px', borderRadius: '15px', marginBottom: '15px' };
+const smallActionBtn = { flex: 1, padding: '12px', borderRadius: '10px', border: 'none', background: 'rgba(255,255,255,0.1)', color: '#fff', fontSize: '0.8rem', display:'flex', alignItems:'center', justifyContent:'center', gap:'5px' };
+const typeGrid = { display:'flex', gap:'8px', marginBottom:'10px' };
+const photoUploadCard = { flex:1, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', background:'rgba(255,255,255,0.05)', borderRadius:'12px', border:`1px dashed rgba(255,255,255,0.2)`, cursor:'pointer' };
+
+const loginOverlay = { height: '100vh', display: 'flex', justifyContent: 'center', alignItems: 'center', background: '#000', backgroundImage: 'radial-gradient(circle at 50% 10%, #0f2e20 0%, #000000 100%)' };
+const inputWrapper = { position: 'relative', marginBottom: '15px' };
+const inputIcon = { position: 'absolute', left: '15px', top: '50%', transform: 'translateY(-50%)', color: THEME.textSecondary };
+const loginInput = { width: '100%', padding: '16px 16px 16px 45px', borderRadius: '15px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: '#fff', outline: 'none' };
+const loginBtn = { width: '100%', padding: '16px', borderRadius: '15px', background: THEME.accentGradient, color: '#000', fontWeight: '800', border: 'none', cursor: 'pointer', display:'flex', alignItems:'center', justifyContent:'center' };
+const fullCenter = { height: '100vh', display: 'flex', justifyContent: 'center', alignItems: 'center', background: '#000', color:'#fff' };
